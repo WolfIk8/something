@@ -1,48 +1,138 @@
 @echo off
+chcp 65001 >nul
+color 0B
+title COMSS.ONE DNS CONTROLLER
 setlocal enabledelayedexpansion
 
-:: Само-запрос прав администратора (как в серьезных утилитах)
-:check_admin
+:: ===============================
+:: CONFIG (можно менять тут)
+:: ===============================
+set "DNS1=76.76.2.22"
+set "DNS2=76.76.10.22"
+set "DOH=https://dns.comss.one/dns-query"
+set "RULE_NAME=ComssDoH"
+
+:: ===============================
+:: ELEVATION
+:: ===============================
+echo.
+echo  INITIALIZING...
+timeout /t 2 >nul
+
 net session >nul 2>&1
 if %errorLevel% neq 0 (
-    echo [!] Запрос прав администратора...
     powershell -Command "Start-Process -FilePath '%0' -Verb RunAs"
     exit /b
 )
 
+color 0F
+
 :main
 cls
-title COMSS DNS CONTROL
+echo  =========================================
+echo        COMSS.ONE DNS UTILITY
+echo  =========================================
 echo.
-echo  ############################################
-echo  #          COMSS.ONE DNS SERVICE           #
-echo  ############################################
-echo.
+echo  [ SCANNING NETWORK ADAPTERS... ]
 
-:: Определяем текущий статус
-powershell -Command "$a=Get-NetAdapter|?{$_.Status -eq 'Up'}|Select -First 1; $d=(Get-DnsClientServerAddress -InterfaceAlias $a.Name).ServerAddresses; if($d -contains '76.76.2.22'){exit 10}else{exit 20}"
-set "status_code=%errorlevel%"
+:: Берём только физические активные адаптеры
+set "adapter="
+for /f "tokens=*" %%a in ('
+ powershell -Command "Get-NetAdapter | Where-Object {$_.Status -eq 'Up' -and $_.HardwareInterface -eq $true} | Select-Object -First 1 -ExpandProperty Name"
+') do set "adapter=%%a"
 
-if %status_code% equ 10 (
-    echo  [ СТАТУС: АКТИВЕН (Шифрование DoH) ]
-    echo.
-    echo  1. Остановить (Вернуть АВТО)
-) else (
-    echo  [ СТАТУС: ВЫКЛЮЧЕН ]
-    echo.
-    echo  1. Запустить Comss DNS
+if not defined adapter (
+    echo  [ ERROR ] No active adapter found!
+    pause
+    exit
 )
-echo  2. Выход
-echo.
-set /p "cmd=Введите номер: "
 
-if "%cmd%"=="1" goto toggle
-if "%cmd%"=="2" exit
+:: Получаем текущие DNS
+set "current_dns=OFF"
+for /f "tokens=*" %%d in ('
+ powershell -Command "(Get-DnsClientServerAddress -InterfaceAlias '!adapter!').ServerAddresses"
+') do (
+    echo %%d | findstr "%DNS1%" >nul && set "current_dns=ON"
+)
+
+cls
+echo  =========================================
+echo        COMSS.ONE DNS UTILITY
+echo  =========================================
+echo.
+echo  Active Interface : !adapter!
+
+if "!current_dns!"=="ON" (
+    echo  DNS Status       : [ DoH CONFIGURED ]
+) else (
+    echo  DNS Status       : [ DEFAULT ]
+)
+
+echo.
+echo  [1] Toggle DNS
+echo  [2] Info
+echo  [3] Exit
+echo.
+
+set /p choice=Enter option: 
+
+if "%choice%"=="1" goto toggle
+if "%choice%"=="2" goto info
+if "%choice%"=="3" exit
 goto main
 
 :toggle
 echo.
-echo  [ Идет настройка сети... ]
-powershell -Command "$adapter = Get-NetAdapter | Where-Object { $_.Status -eq 'Up' } | Select-Object -First 1 -ExpandProperty Name; $current = Get-DnsClientServerAddress -InterfaceAlias $adapter; if ($current.ServerAddresses -contains '76.76.2.22') { Set-DnsClientServerAddress -InterfaceAlias $adapter -ResetServerAddresses; Get-DnsClientNrptRule | Where-Object {$_.DisplayName -eq 'ComssDoH'} | Remove-DnsClientNrptRule -Force; Write-Host ' >>> Настройки сброшены.' -ForegroundColor Yellow } else { Set-DnsClientServerAddress -InterfaceAlias $adapter -ServerAddresses ('76.76.2.22','76.76.10.22'); Add-DnsClientNrptRule -Namespace '.' -NameSubstitutionQuery 'https://dns.comss.one/dns-query' -DisplayName 'ComssDoH'; Write-Host ' >>> DNS Comss.one успешно запущен!' -ForegroundColor Green }"
+echo  Applying changes...
+
+if "!current_dns!"=="ON" (
+    :: RESET DNS + удалить правило
+    powershell -Command ^
+    "Set-DnsClientServerAddress -InterfaceAlias '!adapter!' -ResetServerAddresses; ^
+     Get-DnsClientNrptRule | Where-Object {$_.DisplayName -eq '%RULE_NAME%'} | Remove-DnsClientNrptRule -Force"
+
+    if %errorlevel%==0 (
+        echo  [ OK ] DNS reset to automatic
+    ) else (
+        echo  [ ERROR ] Failed to reset DNS
+    )
+
+) else (
+    :: Удаляем старое правило если есть
+    powershell -Command ^
+    "Get-DnsClientNrptRule | Where-Object {$_.DisplayName -eq '%RULE_NAME%'} | Remove-DnsClientNrptRule -Force"
+
+    :: Применяем DNS + DoH
+    powershell -Command ^
+    "Set-DnsClientServerAddress -InterfaceAlias '!adapter!' -ServerAddresses ('%DNS1%','%DNS2%'); ^
+     Add-DnsClientNrptRule -Namespace '.' -NameSubstitutionQuery '%DOH%' -DisplayName '%RULE_NAME%'"
+
+    if %errorlevel%==0 (
+        echo  [ OK ] Comss DNS applied with DoH
+    ) else (
+        echo  [ ERROR ] Failed to apply DNS
+    )
+)
+
 timeout /t 2 >nul
+goto main
+
+:info
+cls
+echo  =========================================
+echo               INFORMATION
+echo  =========================================
+echo.
+echo  DNS Servers:
+echo   %DNS1%
+echo   %DNS2%
+echo.
+echo  DoH Endpoint:
+echo   %DOH%
+echo.
+echo  Notes:
+echo  - Encrypts DNS queries (DoH)
+echo  - Does NOT hide full traffic (not a VPN)
+echo.
+pause
 goto main
