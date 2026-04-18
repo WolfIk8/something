@@ -1,138 +1,252 @@
 @echo off
 chcp 65001 >nul
-color 0B
+setlocal EnableExtensions EnableDelayedExpansion
 title COMSS.ONE DNS CONTROLLER
-setlocal enabledelayedexpansion
+color 0B
 
 :: ===============================
-:: CONFIG (можно менять тут)
+:: CONFIG
 :: ===============================
 set "DNS1=76.76.2.22"
 set "DNS2=76.76.10.22"
 set "DOH=https://dns.comss.one/dns-query"
 set "RULE_NAME=ComssDoH"
+set "CFG=%~dp0selected_adapter.txt"
 
-:: ===============================
-:: ELEVATION
-:: ===============================
-echo.
-echo  INITIALIZING...
-timeout /t 2 >nul
+call :RequireAdmin
+if errorlevel 1 exit /b
 
+call :LoadAdapter
+goto Main
+
+
+:RequireAdmin
 net session >nul 2>&1
-if %errorLevel% neq 0 (
-    powershell -Command "Start-Process -FilePath '%0' -Verb RunAs"
-    exit /b
+if not errorlevel 1 exit /b 0
+
+echo.
+echo  Требуются права администратора...
+powershell -NoProfile -Command "Start-Process -FilePath '%~f0' -Verb RunAs"
+exit /b 1
+
+
+:LoadAdapter
+set "adapter="
+
+if exist "%CFG%" (
+    set /p "adapter="<"%CFG%"
 )
 
-color 0F
+if defined adapter (
+    powershell -NoProfile -Command "if (Get-NetAdapter -Name '%adapter%' -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }"
+    if errorlevel 1 set "adapter="
+)
 
-:main
-cls
-echo  =========================================
-echo        COMSS.ONE DNS UTILITY
-echo  =========================================
-echo.
-echo  [ SCANNING NETWORK ADAPTERS... ]
+if not defined adapter call :AutoPickAdapter
 
-:: Берём только физические активные адаптеры
+if defined adapter (
+    >"%CFG%" (echo !adapter!)
+)
+
+exit /b 0
+
+
+:AutoPickAdapter
 set "adapter="
-for /f "tokens=*" %%a in ('
- powershell -Command "Get-NetAdapter | Where-Object {$_.Status -eq 'Up' -and $_.HardwareInterface -eq $true} | Select-Object -First 1 -ExpandProperty Name"
-') do set "adapter=%%a"
+
+for /f "usebackq delims=" %%A in (`powershell -NoProfile -Command "Get-NetAdapter -Physical | Where-Object { $_.Status -eq 'Up' } | Sort-Object Name | Select-Object -First 1 -ExpandProperty Name"`) do set "adapter=%%A"
 
 if not defined adapter (
-    echo  [ ERROR ] No active adapter found!
-    pause
-    exit
+    for /f "usebackq delims=" %%A in (`powershell -NoProfile -Command "Get-NetAdapter | Where-Object { $_.Status -ne 'Disabled' } | Sort-Object Status,Name | Select-Object -First 1 -ExpandProperty Name"`) do set "adapter=%%A"
 )
 
-:: Получаем текущие DNS
-set "current_dns=OFF"
-for /f "tokens=*" %%d in ('
- powershell -Command "(Get-DnsClientServerAddress -InterfaceAlias '!adapter!').ServerAddresses"
-') do (
-    echo %%d | findstr "%DNS1%" >nul && set "current_dns=ON"
+if defined adapter (
+    >"%CFG%" (echo !adapter!)
 )
+
+exit /b 0
+
+
+:GetAdapterDetails
+set "adapter_type=Неизвестно"
+set "adapter_ip=—"
+set "adapter_dns=—"
+set "dns_status=По умолчанию"
+
+if not defined adapter exit /b 0
+
+for /f "usebackq delims=" %%A in (`powershell -NoProfile -Command "$a = Get-NetAdapter -Name '%adapter%' -ErrorAction SilentlyContinue; if($a){ if($a.InterfaceDescription -match 'Wi-?Fi|Wireless|802\.11'){ 'Wi-Fi' } elseif($a.InterfaceDescription -match 'Ethernet|LAN'){ 'Ethernet' } else { 'Другой' } }"`) do set "adapter_type=%%A"
+
+for /f "usebackq delims=" %%A in (`powershell -NoProfile -Command "$a = Get-NetAdapter -Name '%adapter%' -ErrorAction SilentlyContinue; if($a){ $ip = Get-NetIPAddress -InterfaceIndex $a.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -notlike '169.254*' } | Select-Object -First 1 -ExpandProperty IPAddress; if($ip){ $ip } }"`) do set "adapter_ip=%%A"
+
+for /f "usebackq delims=" %%A in (`powershell -NoProfile -Command "$a = (Get-DnsClientServerAddress -InterfaceAlias '%adapter%' -AddressFamily IPv4 -ErrorAction SilentlyContinue).ServerAddresses; if($a){ ($a -join ', ') }"`) do set "adapter_dns=%%A"
+
+for /f "usebackq delims=" %%A in (`powershell -NoProfile -Command "$a = (Get-DnsClientServerAddress -InterfaceAlias '%adapter%' -AddressFamily IPv4 -ErrorAction SilentlyContinue).ServerAddresses; if ((@($a) -contains '%DNS1%') -and (@($a) -contains '%DNS2%')) { 'DoH ВКЛ' } else { 'По умолчанию' }"`) do set "dns_status=%%A"
+
+exit /b 0
+
+
+:Main
+call :LoadAdapter
+call :GetAdapterDetails
 
 cls
 echo  =========================================
-echo        COMSS.ONE DNS UTILITY
+echo        COMSS.ONE DNS УТИЛИТА
 echo  =========================================
 echo.
-echo  Active Interface : !adapter!
+echo  Активный адаптер : !adapter!
+echo  Тип адаптера     : !adapter_type!
+echo  IPv4             : !adapter_ip!
+echo  DNS серверы      : !adapter_dns!
+echo  Статус           : !dns_status!
+echo.
+echo  [1] Переключить DNS
+echo  [2] Информация
+echo  [3] Выбрать адаптер
+echo  [4] Полный сброс
+echo  [5] Выход
+echo.
 
-if "!current_dns!"=="ON" (
-    echo  DNS Status       : [ DoH CONFIGURED ]
+choice /c 12345 /n /m "Введите команду"
+if errorlevel 5 goto Quit
+if errorlevel 4 goto FullReset
+if errorlevel 3 goto SelectAdapter
+if errorlevel 2 goto Info
+if errorlevel 1 goto Toggle
+goto Main
+
+
+:Toggle
+call :GetAdapterDetails
+
+if /i "!dns_status!"=="DoH ВКЛ" (
+    goto TurnOff
 ) else (
-    echo  DNS Status       : [ DEFAULT ]
+    goto TurnOn
 )
 
+
+:TurnOn
 echo.
-echo  [1] Toggle DNS
-echo  [2] Info
-echo  [3] Exit
-echo.
+echo  Применение Comss DNS...
 
-set /p choice=Enter option: 
+powershell -NoProfile -Command "$ErrorActionPreference='SilentlyContinue'; Get-DnsClientDohServerAddress -ServerAddress @('%DNS1%','%DNS2%') | Remove-DnsClientDohServerAddress -Confirm:$false -ErrorAction SilentlyContinue; Add-DnsClientDohServerAddress -ServerAddress '%DNS1%' -DohTemplate '%DOH%' -AllowFallbackToUdp $false -AutoUpgrade $true; Add-DnsClientDohServerAddress -ServerAddress '%DNS2%' -DohTemplate '%DOH%' -AllowFallbackToUdp $false -AutoUpgrade $true; Set-DnsClientServerAddress -InterfaceAlias '%adapter%' -ServerAddresses @('%DNS1%','%DNS2%'); Clear-DnsClientCache"
 
-if "%choice%"=="1" goto toggle
-if "%choice%"=="2" goto info
-if "%choice%"=="3" exit
-goto main
-
-:toggle
-echo.
-echo  Applying changes...
-
-if "!current_dns!"=="ON" (
-    :: RESET DNS + удалить правило
-    powershell -Command ^
-    "Set-DnsClientServerAddress -InterfaceAlias '!adapter!' -ResetServerAddresses; ^
-     Get-DnsClientNrptRule | Where-Object {$_.DisplayName -eq '%RULE_NAME%'} | Remove-DnsClientNrptRule -Force"
-
-    if %errorlevel%==0 (
-        echo  [ OK ] DNS reset to automatic
-    ) else (
-        echo  [ ERROR ] Failed to reset DNS
-    )
-
+if errorlevel 1 (
+    echo  [ОШИБКА] Не удалось включить DNS.
 ) else (
-    :: Удаляем старое правило если есть
-    powershell -Command ^
-    "Get-DnsClientNrptRule | Where-Object {$_.DisplayName -eq '%RULE_NAME%'} | Remove-DnsClientNrptRule -Force"
-
-    :: Применяем DNS + DoH
-    powershell -Command ^
-    "Set-DnsClientServerAddress -InterfaceAlias '!adapter!' -ServerAddresses ('%DNS1%','%DNS2%'); ^
-     Add-DnsClientNrptRule -Namespace '.' -NameSubstitutionQuery '%DOH%' -DisplayName '%RULE_NAME%'"
-
-    if %errorlevel%==0 (
-        echo  [ OK ] Comss DNS applied with DoH
-    ) else (
-        echo  [ ERROR ] Failed to apply DNS
-    )
+    echo  [OK] Comss DNS включён.
 )
 
 timeout /t 2 >nul
-goto main
+goto Main
 
-:info
+
+:TurnOff
+echo.
+echo  Возврат на автоматический DNS...
+
+powershell -NoProfile -Command "$ErrorActionPreference='SilentlyContinue'; Set-DnsClientServerAddress -InterfaceAlias '%adapter%' -ResetServerAddresses; Get-DnsClientDohServerAddress -ServerAddress @('%DNS1%','%DNS2%') | Remove-DnsClientDohServerAddress -Confirm:$false -ErrorAction SilentlyContinue; Get-DnsClientNrptRule | Where-Object { $_.DisplayName -eq '%RULE_NAME%' } | Remove-DnsClientNrptRule -Force -ErrorAction SilentlyContinue; Clear-DnsClientCache"
+
+if errorlevel 1 (
+    echo  [ОШИБКА] Не удалось сбросить DNS.
+) else (
+    echo  [OK] DNS возвращён на автоматический.
+)
+
+timeout /t 2 >nul
+goto Main
+
+
+:SelectAdapter
 cls
 echo  =========================================
-echo               INFORMATION
+echo        ВЫБОР СЕТЕВОГО АДАПТЕРА
 echo  =========================================
 echo.
-echo  DNS Servers:
+
+set "count=0"
+
+for /f "usebackq tokens=1-4 delims=|" %%A in (`powershell -NoProfile -Command "Get-NetAdapter | Sort-Object Status,Name | ForEach-Object { $ip = (Get-NetIPAddress -InterfaceIndex $_.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -notlike '169.254*' } | Select-Object -First 1 -ExpandProperty IPAddress); $type = if ($_.InterfaceDescription -match 'Wi-?Fi|Wireless|802\.11') { 'Wi-Fi' } elseif ($_.InterfaceDescription -match 'Ethernet|LAN') { 'Ethernet' } else { 'Другой' }; '{0}|{1}|{2}|{3}' -f $_.Name,$_.Status,$type,($ip -as [string]) }"`) do (
+    set /a count+=1
+    set "adapter_name[!count!]=%%A"
+    set "adapter_status[!count!]=%%B"
+    set "adapter_type[!count!]=%%C"
+    set "adapter_ip[!count!]=%%D"
+    echo  [!count!] %%A  [%%B / %%C / %%D]
+)
+
+if !count! equ 0 (
+    echo.
+    echo  Нет доступных адаптеров.
+    pause
+    goto Main
+)
+
+echo.
+set /p "sel=Введите номер адаптера (Enter = назад): "
+if not defined sel goto Main
+
+call set "picked=%%adapter_name[%sel%]%%"
+if not defined picked (
+    echo.
+    echo  Неверный выбор.
+    timeout /t 2 >nul
+    goto SelectAdapter
+)
+
+set "adapter=%picked%"
+> "%CFG%" (echo %adapter%)
+
+echo.
+echo  Выбран адаптер: %adapter%
+timeout /t 1 >nul
+goto Main
+
+
+:FullReset
+echo.
+echo  Выполняется полный сброс...
+
+powershell -NoProfile -Command "$ErrorActionPreference='SilentlyContinue'; Set-DnsClientServerAddress -InterfaceAlias '%adapter%' -ResetServerAddresses; Get-DnsClientDohServerAddress -ServerAddress @('%DNS1%','%DNS2%') | Remove-DnsClientDohServerAddress -Confirm:$false -ErrorAction SilentlyContinue; Get-DnsClientNrptRule | Where-Object { $_.DisplayName -eq '%RULE_NAME%' } | Remove-DnsClientNrptRule -Force -ErrorAction SilentlyContinue; Clear-DnsClientCache"
+
+del "%CFG%" >nul 2>&1
+set "adapter="
+
+if errorlevel 1 (
+    echo  [ОШИБКА] Сброс выполнен не полностью.
+) else (
+    echo  [OK] Полный сброс завершён.
+)
+
+timeout /t 2 >nul
+goto Main
+
+
+:Info
+cls
+echo  =========================================
+echo               ИНФОРМАЦИЯ
+echo  =========================================
+echo.
+echo  DNS:
 echo   %DNS1%
 echo   %DNS2%
 echo.
-echo  DoH Endpoint:
+echo  DoH:
 echo   %DOH%
 echo.
-echo  Notes:
-echo  - Encrypts DNS queries (DoH)
-echo  - Does NOT hide full traffic (not a VPN)
+echo  Что умеет утилита:
+echo  - выбирает адаптер вручную;
+echo  - запоминает выбранный адаптер рядом с .bat;
+echo  - показывает тип адаптера и IPv4;
+echo  - включает и выключает DNS;
+echo  - делает полный сброс на автоматический режим.
 echo.
 pause
-goto main
+goto Main
+
+
+:Quit
+exit /b
