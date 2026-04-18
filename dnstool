@@ -1,0 +1,28 @@
+@echo off
+:: Проверка прав администратора
+net session >nul 2>&1
+if %errorLevel% neq 0 (
+    echo ОШИБКА: Запустите программу ПРАВОЙ КНОПКОЙ МЫШИ -> "Запуск от имени администратора"
+    pause
+    exit
+)
+
+:menu
+cls
+echo ==========================================
+echo      УПРАВЛЕНИЕ DNS (Windows 11)
+echo ==========================================
+echo 1. ВКЛЮЧИТЬ / ВЫКЛЮЧИТЬ (Toggle) Comss DNS
+echo 2. ВЫХОД
+echo ------------------------------------------
+set /p choice="Выберите пункт (1-2): "
+
+if "%choice%"=="1" goto toggle
+if "%choice%"=="2" exit
+goto menu
+
+:toggle
+echo Пожалуйста, подождите...
+powershell -Command "$adapter = Get-NetAdapter | Where-Object { $_.Status -eq 'Up' } | Select-Object -First 1 -ExpandProperty Name; $current = Get-DnsClientServerAddress -InterfaceAlias $adapter; if ($current.ServerAddresses -contains '76.76.2.22') { Set-DnsClientServerAddress -InterfaceAlias $adapter -ResetServerAddresses; Get-DnsClientNrptRule | Where-Object {$_.DisplayName -eq 'ComssDoH'} | Remove-DnsClientNrptRule -Force; Write-Host '>>> DNS сброшен на АВТОМАТИЧЕСКИЙ' -ForegroundColor Yellow } else { Set-DnsClientServerAddress -InterfaceAlias $adapter -ServerAddresses ('76.76.2.22','76.76.10.22'); Add-DnsClientNrptRule -Namespace '.' -NameSubstitutionQuery 'https://dns.comss.one/dns-query' -DisplayName 'ComssDoH'; Write-Host '>>> DNS Comss.one (DoH) ВКЛЮЧЕН' -ForegroundColor Green }"
+pause
+goto menu
