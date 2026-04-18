@@ -1,28 +1,48 @@
 @echo off
-:: Проверка прав администратора
+setlocal enabledelayedexpansion
+
+:: Само-запрос прав администратора (как в серьезных утилитах)
+:check_admin
 net session >nul 2>&1
 if %errorLevel% neq 0 (
-    echo ОШИБКА: Запустите программу ПРАВОЙ КНОПКОЙ МЫШИ -> "Запуск от имени администратора"
-    pause
-    exit
+    echo [!] Запрос прав администратора...
+    powershell -Command "Start-Process -FilePath '%0' -Verb RunAs"
+    exit /b
 )
 
-:menu
+:main
 cls
-echo ==========================================
-echo      УПРАВЛЕНИЕ DNS (Windows 11)
-echo ==========================================
-echo 1. ВКЛЮЧИТЬ / ВЫКЛЮЧИТЬ (Toggle) Comss DNS
-echo 2. ВЫХОД
-echo ------------------------------------------
-set /p choice="Выберите пункт (1-2): "
+title COMSS DNS CONTROL
+echo.
+echo  ############################################
+echo  #          COMSS.ONE DNS SERVICE           #
+echo  ############################################
+echo.
 
-if "%choice%"=="1" goto toggle
-if "%choice%"=="2" exit
-goto menu
+:: Определяем текущий статус
+powershell -Command "$a=Get-NetAdapter|?{$_.Status -eq 'Up'}|Select -First 1; $d=(Get-DnsClientServerAddress -InterfaceAlias $a.Name).ServerAddresses; if($d -contains '76.76.2.22'){exit 10}else{exit 20}"
+set "status_code=%errorlevel%"
+
+if %status_code% equ 10 (
+    echo  [ СТАТУС: АКТИВЕН (Шифрование DoH) ]
+    echo.
+    echo  1. Остановить (Вернуть АВТО)
+) else (
+    echo  [ СТАТУС: ВЫКЛЮЧЕН ]
+    echo.
+    echo  1. Запустить Comss DNS
+)
+echo  2. Выход
+echo.
+set /p "cmd=Введите номер: "
+
+if "%cmd%"=="1" goto toggle
+if "%cmd%"=="2" exit
+goto main
 
 :toggle
-echo Пожалуйста, подождите...
-powershell -Command "$adapter = Get-NetAdapter | Where-Object { $_.Status -eq 'Up' } | Select-Object -First 1 -ExpandProperty Name; $current = Get-DnsClientServerAddress -InterfaceAlias $adapter; if ($current.ServerAddresses -contains '76.76.2.22') { Set-DnsClientServerAddress -InterfaceAlias $adapter -ResetServerAddresses; Get-DnsClientNrptRule | Where-Object {$_.DisplayName -eq 'ComssDoH'} | Remove-DnsClientNrptRule -Force; Write-Host '>>> DNS сброшен на АВТОМАТИЧЕСКИЙ' -ForegroundColor Yellow } else { Set-DnsClientServerAddress -InterfaceAlias $adapter -ServerAddresses ('76.76.2.22','76.76.10.22'); Add-DnsClientNrptRule -Namespace '.' -NameSubstitutionQuery 'https://dns.comss.one/dns-query' -DisplayName 'ComssDoH'; Write-Host '>>> DNS Comss.one (DoH) ВКЛЮЧЕН' -ForegroundColor Green }"
-pause
-goto menu
+echo.
+echo  [ Идет настройка сети... ]
+powershell -Command "$adapter = Get-NetAdapter | Where-Object { $_.Status -eq 'Up' } | Select-Object -First 1 -ExpandProperty Name; $current = Get-DnsClientServerAddress -InterfaceAlias $adapter; if ($current.ServerAddresses -contains '76.76.2.22') { Set-DnsClientServerAddress -InterfaceAlias $adapter -ResetServerAddresses; Get-DnsClientNrptRule | Where-Object {$_.DisplayName -eq 'ComssDoH'} | Remove-DnsClientNrptRule -Force; Write-Host ' >>> Настройки сброшены.' -ForegroundColor Yellow } else { Set-DnsClientServerAddress -InterfaceAlias $adapter -ServerAddresses ('76.76.2.22','76.76.10.22'); Add-DnsClientNrptRule -Namespace '.' -NameSubstitutionQuery 'https://dns.comss.one/dns-query' -DisplayName 'ComssDoH'; Write-Host ' >>> DNS Comss.one успешно запущен!' -ForegroundColor Green }"
+timeout /t 2 >nul
+goto main
