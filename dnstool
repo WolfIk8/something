@@ -10,79 +10,13 @@ set "DOH=https://dns.comss.one/dns-query"
 set "RULE_NAME=ComssDoH"
 set "CFG=%~dp0selected_connection.txt"
 
+:: Инициализация переменных
 set "adapter="
 set "target_ssid="
-set "wifi_alias="
-set "wifi_ssid="
-set "wifi_state="
-set "wifi_ip="
-set "adapter_type="
-set "adapter_profile="
-set "adapter_category="
-set "adapter_ip="
-set "adapter_dns="
-set "dns_state="
-
-call :RequireAdmin
-if errorlevel 1 exit /b
-
-call :LoadAdapter
-goto Main
-
-
-:RequireAdmin
-net session >nul 2>&1
-if not errorlevel 1 exit /b 0
-
-echo.
-echo  Требуются права администратора...
-powershell -NoProfile -Command "Start-Process -FilePath '%~f0' -Verb RunAs"
-exit /b 1
-
-
-:LoadAdapter
-if defined adapter exit /b 0
-
-if exist "%CFG%" (
-    set /p "adapter="<"%CFG%"
-)
-
-if defined adapter (
-    powershell -NoProfile -Command "param($n) if (Get-NetAdapter -Name $n -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }" "%adapter%"
-    if errorlevel 1 set "adapter="
-)
-
-if not defined adapter call :AutoPickAdapter
-
-if defined adapter >"%CFG%" echo %adapter%
-exit /b 0
-
-
-:AutoPickAdapter
-if defined adapter exit /b 0
-
-for /f "usebackq delims=" %%A in (`powershell -NoProfile -Command "Get-NetAdapter -Physical | Where-Object { $_.Status -eq 'Up' } | Sort-Object Name | Select-Object -First 1 -ExpandProperty Name"`) do set "adapter=%%A"
-
-if not defined adapter (
-    for /f "usebackq delims=" %%A in (`powershell -NoProfile -Command "Get-NetAdapter | Where-Object { $_.Status -ne 'Disabled' } | Sort-Object Status,Name | Select-Object -First 1 -ExpandProperty Name"`) do set "adapter=%%A"
-)
-
-if defined adapter >"%CFG%" echo %adapter%
-exit /b 0
-
-
-:GetWifiContext
 set "wifi_alias=—"
 set "wifi_ssid=—"
 set "wifi_state=—"
 set "wifi_ip=—"
-
-for /f "usebackq delims=" %%L in (`powershell -NoProfile -Command "$txt=(netsh wlan show interfaces 2^>$null | Out-String -Width 4096); $alias=''; $ssid=''; $state=''; foreach($line in $txt -split ""`r?`n""){ if($line -match '^\s*(?:Name|Имя)\s*:\s*(.+)$'){ $alias=$matches[1].Trim() } elseif($line -match '^\s*SSID\s*:\s*(.+)$' -and $line -notmatch 'BSSID'){ $ssid=$matches[1].Trim() } elseif($line -match '^\s*(?:State|Состояние)\s*:\s*(.+)$'){ $state=$matches[1].Trim() } }; $ip=''; if($alias){ $a=Get-NetAdapter -Name $alias -ErrorAction SilentlyContinue; if($a){ $ip=(Get-NetIPAddress -InterfaceIndex $a.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -notlike '169.254*' } | Select-Object -First 1 -ExpandProperty IPAddress) } }; if($alias){ 'wifi_alias='+$alias }; if($ssid){ 'wifi_ssid='+$ssid }; if($state){ 'wifi_state='+$state }; if($ip){ 'wifi_ip='+$ip }"`) do set "%%L"
-
-exit /b 0
-
-
-:GetAdapterContext
 set "adapter_type=—"
 set "adapter_profile=—"
 set "adapter_category=—"
@@ -90,61 +24,96 @@ set "adapter_ip=—"
 set "adapter_dns=—"
 set "dns_state=По умолчанию"
 
-if not defined adapter exit /b 0
+call :RequireAdmin
+if errorlevel 1 exit /b
 
-for /f "usebackq delims=" %%L in (`powershell -NoProfile -Command "param($name,$dns1,$dns2) $a=Get-NetAdapter -Name $name -ErrorAction SilentlyContinue; if(-not $a){ 'adapter_type=—'; 'adapter_profile=—'; 'adapter_category=—'; 'adapter_ip=—'; 'adapter_dns=—'; 'dns_state=По умолчанию'; exit } $type = if($a.InterfaceDescription -match 'Wi-?Fi|Wireless|802\.11'){ 'Wi-Fi' } elseif($a.InterfaceDescription -match 'Ethernet|LAN'){ 'Ethernet' } else { 'Другой' }; $p = Get-NetConnectionProfile -InterfaceIndex $a.ifIndex -ErrorAction SilentlyContinue | Select-Object -First 1; $ip = Get-NetIPAddress -InterfaceIndex $a.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -notlike '169.254*' } | Select-Object -First 1 -ExpandProperty IPAddress; $dns = (Get-DnsClientServerAddress -InterfaceAlias $name -AddressFamily IPv4 -ErrorAction SilentlyContinue).ServerAddresses; $profile = if($p){ $p.Name } else { '—' }; $cat = if($p){ $p.NetworkCategory } else { '—' }; $ipText = if($ip){ $ip } else { '—' }; $dnsText = if($dns){ $dns -join ', ' } else { '—' }; $state = if((@($dns) -contains $dns1) -and (@($dns) -contains $dns2)){ 'DoH ВКЛ' } else { 'По умолчанию' }; 'adapter_type='+$type; 'adapter_profile='+$profile; 'adapter_category='+$cat; 'adapter_ip='+$ipText; 'adapter_dns='+$dnsText; 'dns_state='+$state" "%adapter%" "%DNS1%" "%DNS2%"`) do set "%%L"
+call :LoadAdapter
+goto Main
 
+:RequireAdmin
+net session >nul 2>&1
+if not errorlevel 1 exit /b 0
+echo.
+echo  Требуются права администратора...
+powershell -NoProfile -Command "Start-Process -FilePath '%~f0' -Verb RunAs"
+exit /b 1
+
+:LoadAdapter
+if exist "%CFG%" set /p "adapter="<"%CFG%"
+if defined adapter (
+    powershell -NoProfile -Command "if (-not (Get-NetAdapter -Name '!adapter!' -ErrorAction SilentlyContinue)) { exit 1 }"
+    if errorlevel 1 set "adapter="
+)
+if not defined adapter call :AutoPickAdapter
 exit /b 0
 
+:AutoPickAdapter
+for /f "usebackq delims=" %%A in (`powershell -NoProfile -Command "Get-NetAdapter -Physical | Where-Object { $_.Status -eq 'Up' } | Sort-Object Name | Select-Object -First 1 -ExpandProperty Name"`) do set "adapter=%%A"
+if defined adapter >"%CFG%" echo !adapter!
+exit /b 0
+
+:GetFullContext
+:: Сбор всех данных одним махом для скорости и исключения багов
+for /f "usebackq delims=" %%L in (`powershell -NoProfile -Command ^
+    "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; ^
+    $wifi = netsh wlan show interfaces | Out-String; ^
+    $w_name = if($wifi -match '(?m)^\s*(?:Name|Имя)\s*:\s*(.+)$') { $Matches[1].Trim() } else { '—' }; ^
+    $w_ssid = if($wifi -match '(?m)^\s*SSID\s*:\s*(.+)$') { $Matches[1].Trim() } else { '—' }; ^
+    $w_state = if($wifi -match '(?m)^\s*(?:State|Состояние)\s*:\s*(.+)$') { $Matches[1].Trim() } else { '—' }; ^
+    $a = Get-NetAdapter -Name '!adapter!' -ErrorAction SilentlyContinue; ^
+    $ip = '—'; $prof = '—'; $cat = '—'; $dnsText = '—'; $dState = 'По умолчанию'; $type = '—'; ^
+    if ($a) { ^
+        $type = if($a.InterfaceDescription -match 'Wi-?Fi|Wireless') { 'Wi-Fi' } else { 'Ethernet' }; ^
+        $ipAddr = Get-NetIPAddress -InterfaceIndex $a.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -notlike '169.254*' } | Select-Object -First 1; ^
+        if ($ipAddr) { $ip = $ipAddr.IPAddress }; ^
+        $p = Get-NetConnectionProfile -InterfaceIndex $a.ifIndex -ErrorAction SilentlyContinue; ^
+        if ($p) { $prof = $p.Name; $cat = $p.NetworkCategory }; ^
+        $dns = (Get-DnsClientServerAddress -InterfaceAlias '!adapter!' -AddressFamily IPv4).ServerAddresses; ^
+        if ($dns) { ^
+            $dnsText = $dns -join ', '; ^
+            if (($dns -contains '%DNS1%') -and ($dns -contains '%DNS2%')) { $dState = 'DoH ВКЛ' }; ^
+        }; ^
+    }; ^
+    write-host ('wifi_alias=' + $w_name); ^
+    write-host ('wifi_ssid=' + $w_ssid); ^
+    write-host ('wifi_state=' + $w_state); ^
+    write-host ('adapter_type=' + $type); ^
+    write-host ('adapter_ip=' + $ip); ^
+    write-host ('adapter_profile=' + $prof); ^
+    write-host ('adapter_category=' + $cat); ^
+    write-host ('adapter_dns=' + $dnsText); ^
+    write-host ('dns_state=' + $dState)"`) do set "%%L"
+exit /b 0
 
 :Main
-call :LoadAdapter
-call :GetWifiContext
-call :GetAdapterContext
-
+call :GetFullContext
 cls
 echo  =========================================
-echo        COMSS.ONE DNS УТИЛИТА
+echo        COMSS.ONE DNS УТИЛИТА (FIXED)
 echo  =========================================
 echo.
-echo  Выбранный адаптер : !adapter!
-echo  Тип адаптера      : !adapter_type!
-echo  Профиль           : !adapter_profile!
-echo  Категория         : !adapter_category!
+echo  [АДАПТЕР]
+echo  Имя               : !adapter! (!adapter_type!)
 echo  IPv4              : !adapter_ip!
-echo  DNS               : !adapter_dns!
-echo  Статус            : !dns_state!
+echo  Профиль           : !adapter_profile! (!adapter_category!)
+echo  DNS сейчас        : !adapter_dns!
+echo  Статус DNS        : !dns_state!
 echo.
-echo  Текущая Wi-Fi     : !wifi_ssid!
-echo  Wi-Fi интерфейс    : !wifi_alias!
-echo  Состояние Wi-Fi    : !wifi_state!
-echo  IPv4 Wi-Fi         : !wifi_ip!
-echo  Целевая SSID       : !target_ssid!
+echo  [WI-FI КОНТЕКСТ]
+echo  Текущая сеть      : !wifi_ssid!
+echo  Состояние         : !wifi_state!
+echo  Целевая SSID      : !target_ssid!
 echo.
-
 if defined target_ssid (
-    if /i "!wifi_ssid!"=="!target_ssid!" (
-        echo  Режим             : Целевая сеть найдена
-    ) else (
-        echo  Режим             : Ожидание целевой сети
-    )
-) else (
-    echo  Режим             : Ручной выбор адаптера
-)
-
+    if /i "!wifi_ssid!"=="!target_ssid!" (echo  РЕЖИМ: [ЦЕЛЬ НАЙДЕНА]) else (echo  РЕЖИМ: [ОЖИДАНИЕ СЕТИ])
+) else (echo  РЕЖИМ: [РУЧНОЙ ВЫБОР])
 echo.
-echo  [1] Проверить и применить сейчас
-echo  [2] Задать целевую Wi-Fi сеть (SSID)
-echo  [3] Выбрать адаптер вручную
-echo  [4] Авто-режим по SSID
-echo  [5] Список сетей и подключений
-echo  [6] Информация
-echo  [7] Полный сброс
-echo  [8] Выход
+echo  [1] Применить DNS сейчас        [5] Список сетей
+echo  [2] Задать целевую Wi-Fi (SSID)  [6] Информация
+echo  [3] Выбрать адаптер вручную     [7] Полный сброс
+echo  [4] Авто-режим по SSID          [8] Выход
 echo.
-
 set /p "choice=Введите команду (1-8): "
-
 if "%choice%"=="1" goto CheckApply
 if "%choice%"=="2" goto SelectSSID
 if "%choice%"=="3" goto SelectAdapter
@@ -153,333 +122,85 @@ if "%choice%"=="5" goto NetworkListMenu
 if "%choice%"=="6" goto Info
 if "%choice%"=="7" goto FullReset
 if "%choice%"=="8" exit /b
-
-echo.
-echo  Неверная команда.
-timeout /t 2 >nul
 goto Main
-
 
 :CheckApply
-call :GetWifiContext
-
 if defined target_ssid (
     if /i "!wifi_ssid!"=="!target_ssid!" (
-        if defined wifi_alias (
-            call :ApplyDnsForInterface "!wifi_alias!"
-            set "adapter=!wifi_alias!"
-            >"%CFG%" echo %adapter%
-            echo.
-            echo  [OK] DNS применён для целевой Wi-Fi сети: !target_ssid!
-        ) else (
-            echo.
-            echo  [INFO] Целевая сеть найдена, но Wi-Fi интерфейс не определён.
-        )
+        call :ApplyDnsForInterface "!wifi_alias!"
     ) else (
-        if /i not "!wifi_alias!"=="—" call :ResetDnsForInterface "!wifi_alias!"
-        echo.
-        echo  [INFO] Сейчас подключена другая сеть. DNS не включён.
+        call :ResetDnsForInterface "!wifi_alias!"
     )
 ) else (
-    if defined adapter (
-        call :ApplyDnsForInterface "!adapter!"
-        echo.
-        echo  [OK] DNS применён к адаптеру: !adapter!
-    ) else (
-        echo.
-        echo  [ОШИБКА] Адаптер не выбран.
-    )
+    call :ApplyDnsForInterface "!adapter!"
 )
-
+echo Готово.
 timeout /t 2 >nul
 goto Main
-
-
-:SelectSSID
-cls
-echo  =========================================
-echo            ВЫБОР ЦЕЛЕВОЙ СЕТИ
-echo  =========================================
-echo.
-call :GetWifiContext
-echo  Текущая SSID : !wifi_ssid!
-echo.
-echo  [1] Использовать текущую SSID
-echo  [2] Ввести SSID вручную
-echo  [3] Выбрать из списка доступных Wi-Fi сетей
-echo  [4] Сбросить целевую SSID
-echo  [5] Назад
-echo.
-
-set /p "schoice=Введите команду (1-5): "
-
-if "%schoice%"=="1" (
-    if /i "!wifi_ssid!"=="—" (
-        echo.
-        echo  Сейчас Wi-Fi не подключён.
-        timeout /t 2 >nul
-        goto SelectSSID
-    )
-    set "target_ssid=!wifi_ssid!"
-    echo.
-    echo  Целевая SSID установлена: !target_ssid!
-    timeout /t 1 >nul
-    goto Main
-)
-
-if "%schoice%"=="2" (
-    echo.
-    set /p "target_ssid=Введите SSID: "
-    if not defined target_ssid goto SelectSSID
-    echo.
-    echo  Целевая SSID установлена: !target_ssid!
-    timeout /t 1 >nul
-    goto Main
-)
-
-if "%schoice%"=="3" goto SelectSSIDFromList
-
-if "%schoice%"=="4" (
-    set "target_ssid="
-    echo.
-    echo  Целевая SSID сброшена.
-    timeout /t 1 >nul
-    goto Main
-)
-
-if "%schoice%"=="5" goto Main
-
-echo.
-echo  Неверная команда.
-timeout /t 2 >nul
-goto SelectSSID
-
-
-:SelectSSIDFromList
-cls
-echo  =========================================
-echo          ДОСТУПНЫЕ WI-FI СЕТИ
-echo  =========================================
-echo.
-
-set "wcount=0"
-
-for /f "usebackq tokens=1-5 delims=|" %%a in (`powershell -NoProfile -Command "$txt=(netsh wlan show networks mode=bssid 2^>$null | Out-String -Width 4096); $seen=@{}; $rows=@(); $ssid=''; $sig='—'; $auth='—'; $enc='—'; foreach($l in $txt -split ""`r?`n""){ if($l -match '^\s*SSID\s+\d+\s*:\s*(.*)$'){ if($ssid -and -not $seen.ContainsKey($ssid)){ $rows += [pscustomobject]@{SSID=$ssid; Signal=$sig; Auth=$auth; Encryption=$enc}; $seen[$ssid]=$true }; $ssid=$matches[1].Trim(); $sig='—'; $auth='—'; $enc='—' } elseif($l -match '^\s*Signal\s*:\s*(.+)$'){ $sig=$matches[1].Trim() } elseif($l -match '^\s*Authentication\s*:\s*(.+)$'){ $auth=$matches[1].Trim() } elseif($l -match '^\s*Encryption\s*:\s*(.+)$'){ $enc=$matches[1].Trim() } }; if($ssid -and -not $seen.ContainsKey($ssid)){ $rows += [pscustomobject]@{SSID=$ssid; Signal=$sig; Auth=$auth; Encryption=$enc} }; $i=0; foreach($r in $rows){ $i++; '{0}|{1}|{2}|{3}|{4}' -f $i,$r.SSID,$r.Signal,$r.Auth,$r.Encryption }"`) do (
-    set /a wcount+=1
-    set "wifi_ssid_list[!wcount!]=%%b"
-    echo  [!a!] %%b ^| %%c ^| %%d ^| %%e
-)
-
-if !wcount! equ 0 (
-    echo.
-    echo  Wi-Fi сети не найдены.
-    pause
-    goto SelectSSID
-)
-
-echo.
-set /p "wsel=Выбери номер сети (Enter = назад): "
-if not defined wsel goto SelectSSID
-
-echo(!wsel!| findstr /r "^[0-9][0-9]*$" >nul
-if errorlevel 1 (
-    echo.
-    echo  Неверный ввод.
-    timeout /t 2 >nul
-    goto SelectSSIDFromList
-)
-
-call set "target_ssid=%%wifi_ssid_list[%wsel%]%%"
-if not defined target_ssid (
-    echo.
-    echo  Номер вне диапазона.
-    timeout /t 2 >nul
-    goto SelectSSIDFromList
-)
-
-echo.
-echo  Целевая SSID: !target_ssid!
-timeout /t 1 >nul
-goto Main
-
 
 :SelectAdapter
 cls
-echo  =========================================
-echo        ВЫБОР СЕТЕВОГО АДАПТЕРА
-echo  =========================================
-echo.
-
+echo Поиск адаптеров...
 set "count=0"
-
-for /f "usebackq tokens=1-7 delims=|" %%a in (`powershell -NoProfile -Command "$wifi=@{}; $txt=(netsh wlan show interfaces 2^>$null | Out-String -Width 4096); $cur=''; foreach($l in $txt -split ""`r?`n""){ if($l -match '^\s*(?:Name|Имя)\s*:\s*(.+)$'){ $cur=$matches[1].Trim() } elseif($l -match '^\s*SSID\s*:\s*(.+)$' -and $l -notmatch 'BSSID'){ if($cur){ $wifi[$cur]=$matches[1].Trim() } } }; Get-NetAdapter | Where-Object { $_.Status -ne 'Disabled' } | Sort-Object Status,Name | ForEach-Object { $type = if($_.InterfaceDescription -match 'Wi-?Fi|Wireless|802\.11'){ 'Wi-Fi' } elseif($_.InterfaceDescription -match 'Ethernet|LAN'){ 'Ethernet' } else { 'Другой' }; $p = Get-NetConnectionProfile -InterfaceIndex $_.ifIndex -ErrorAction SilentlyContinue | Select-Object -First 1; $ip = Get-NetIPAddress -InterfaceIndex $_.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -notlike '169.254*' } | Select-Object -First 1 -ExpandProperty IPAddress; $ssid='—'; if($type -eq 'Wi-Fi' -and $wifi.ContainsKey($_.Name)){ $ssid=$wifi[$_.Name] }; $profile = if($p){ $p.Name } else { '—' }; $cat = if($p){ $p.NetworkCategory } else { '—' }; $ipText = if($ip){ $ip } else { '—' }; '{0}|{1}|{2}|{3}|{4}|{5}|{6}' -f $_.Name,$type,$profile,$ssid,$cat,$ipText,$_.Status }"`) do (
+for /f "usebackq tokens=1* delims=|" %%a in (`powershell -NoProfile -Command "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; Get-NetAdapter | Where-Object { $_.Status -ne 'Disabled' } | ForEach-Object { write-host ('{0}|{1}' -f $_.Name, $_.Status) }"`) do (
     set /a count+=1
     set "adapter_name[!count!]=%%a"
-    echo  [!count!] %%b ^| %%a ^| Профиль: %%c ^| SSID: %%d ^| %%e ^| %%f ^| %%g
+    echo [!count!] %%a (%%b)
 )
-
-if !count! equ 0 (
-    echo.
-    echo  Адаптеры не найдены.
-    pause
-    goto Main
+set /p "sel=Номер (Enter - отмена): "
+if defined sel (
+    call set "picked=%%adapter_name[%sel%]%%"
+    if defined picked (set "adapter=!picked!" & >"%CFG%" echo !adapter!)
 )
-
-echo.
-set /p "sel=Введите номер адаптера (Enter = назад): "
-if not defined sel goto Main
-
-echo(!sel!| findstr /r "^[0-9][0-9]*$" >nul
-if errorlevel 1 (
-    echo.
-    echo  Неверный ввод.
-    timeout /t 2 >nul
-    goto SelectAdapter
-)
-
-call set "picked=%%adapter_name[%sel%]%%"
-if not defined picked (
-    echo.
-    echo  Номер вне диапазона.
-    timeout /t 2 >nul
-    goto SelectAdapter
-)
-
-set "adapter=%picked%"
-> "%CFG%" echo %adapter%
-
-echo.
-echo  Выбран адаптер: %adapter%
-timeout /t 1 >nul
 goto Main
 
+:SelectSSID
+cls
+echo [1] Использовать текущую (!wifi_ssid!)
+echo [2] Ввести вручную
+echo [3] Назад
+set /p "scho=Выбор: "
+if "%scho%"=="1" set "target_ssid=!wifi_ssid!"
+if "%scho%"=="2" set /p "target_ssid=Введите SSID: "
+goto Main
+
+:ApplyDnsForInterface
+if "%~1"=="—" exit /b
+powershell -NoProfile -Command "$ErrorActionPreference='SilentlyContinue'; Add-DnsClientDohServerAddress -ServerAddress '%DNS1%' -DohTemplate '%DOH%' -AllowFallbackToUdp $false -AutoUpgrade $true; Add-DnsClientDohServerAddress -ServerAddress '%DNS2%' -DohTemplate '%DOH%' -AllowFallbackToUdp $false -AutoUpgrade $true; Set-DnsClientServerAddress -InterfaceAlias '%~1' -ServerAddresses @('%DNS1%','%DNS2%'); Clear-DnsClientCache"
+exit /b
+
+:ResetDnsForInterface
+if "%~1"=="—" exit /b
+powershell -NoProfile -Command "Set-DnsClientServerAddress -InterfaceAlias '%~1' -ResetServerAddresses; Clear-DnsClientCache"
+exit /b
 
 :NetworkListMenu
 cls
-echo  =========================================
-echo        СПИСОК СЕТЕЙ И ПОДКЛЮЧЕНИЙ
-echo  =========================================
-echo.
-echo  [1] Текущие подключения
-echo  [2] Доступные Wi-Fi сети
-echo  [3] Назад
-echo.
+powershell -NoProfile -Command "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; Get-NetAdapter | Select-Object Name, Status, LinkSpeed, MacAddress | Format-Table -AutoSize"
+pause
+goto Main
 
-set /p "nchoice=Введите команду (1-3): "
-
-if "%nchoice%"=="1" goto ListConnections
-if "%nchoice%"=="2" goto ListWifiNetworks
-if "%nchoice%"=="3" goto Main
-
-echo.
-echo  Неверная команда.
+:FullReset
+call :ResetDnsForInterface "!adapter!"
+set "target_ssid="
+if exist "%CFG%" del "%CFG%"
+echo Сброс выполнен.
 timeout /t 2 >nul
-goto NetworkListMenu
-
-
-:ListConnections
-cls
-echo  =========================================
-echo           ТЕКУЩИЕ ПОДКЛЮЧЕНИЯ
-echo  =========================================
-echo.
-
-powershell -NoProfile -Command "$wifi=@{}; $txt=(netsh wlan show interfaces 2^>$null | Out-String -Width 4096); $cur=''; foreach($l in $txt -split ""`r?`n""){ if($l -match '^\s*(?:Name|Имя)\s*:\s*(.+)$'){ $cur=$matches[1].Trim() } elseif($l -match '^\s*SSID\s*:\s*(.+)$' -and $l -notmatch 'BSSID'){ if($cur){ $wifi[$cur]=$matches[1].Trim() } } }; $rows = Get-NetAdapter | Where-Object { $_.Status -ne 'Disabled' } | Sort-Object Status,Name | ForEach-Object { $type = if($_.InterfaceDescription -match 'Wi-?Fi|Wireless|802\.11'){ 'Wi-Fi' } elseif($_.InterfaceDescription -match 'Ethernet|LAN'){ 'Ethernet' } else { 'Другой' }; $p = Get-NetConnectionProfile -InterfaceIndex $_.ifIndex -ErrorAction SilentlyContinue | Select-Object -First 1; $ip = Get-NetIPAddress -InterfaceIndex $_.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -notlike '169.254*' } | Select-Object -First 1 -ExpandProperty IPAddress; $ssid='—'; if($type -eq 'Wi-Fi' -and $wifi.ContainsKey($_.Name)){ $ssid=$wifi[$_.Name] }; [pscustomobject]@{Тип=$type; Адаптер=$_.Name; Профиль=if($p){$p.Name}else{'—'}; SSID=$ssid; Категория=if($p){$p.NetworkCategory}else{'—'}; IPv4=if($ip){$ip}else{'—'}; Статус=$_.Status} }; if($rows){ $rows | Format-Table -AutoSize | Out-String -Width 3000 } else { 'Подключения не найдены.' }"
-
-echo.
-pause
-goto NetworkListMenu
-
-
-:ListWifiNetworks
-cls
-echo  =========================================
-echo           ДОСТУПНЫЕ WI-FI СЕТИ
-echo  =========================================
-echo.
-
-powershell -NoProfile -Command "$txt=(netsh wlan show networks mode=bssid 2^>$null | Out-String -Width 4096); $seen=@{}; $rows=@(); $ssid=''; $sig='—'; $auth='—'; $enc='—'; foreach($l in $txt -split ""`r?`n""){ if($l -match '^\s*SSID\s+\d+\s*:\s*(.*)$'){ if($ssid -and -not $seen.ContainsKey($ssid)){ $rows += [pscustomobject]@{SSID=$ssid; Signal=$sig; Auth=$auth; Encryption=$enc}; $seen[$ssid]=$true }; $ssid=$matches[1].Trim(); $sig='—'; $auth='—'; $enc='—' } elseif($l -match '^\s*Signal\s*:\s*(.+)$'){ $sig=$matches[1].Trim() } elseif($l -match '^\s*Authentication\s*:\s*(.+)$'){ $auth=$matches[1].Trim() } elseif($l -match '^\s*Encryption\s*:\s*(.+)$'){ $enc=$matches[1].Trim() } }; if($ssid -and -not $seen.ContainsKey($ssid)){ $rows += [pscustomobject]@{SSID=$ssid; Signal=$sig; Auth=$auth; Encryption=$enc} }; if($rows.Count -gt 0){ $i=0; $rows | ForEach-Object { $i++; [pscustomobject]@{№=$i; SSID=$_.SSID; Signal=$_.Signal; Auth=$_.Auth; Encryption=$_.Encryption} } | Format-Table -AutoSize | Out-String -Width 3000 } else { 'Wi-Fi сети не найдены.' }"
-
-echo.
-pause
-goto NetworkListMenu
-
+goto Main
 
 :AutoMode
-if not defined target_ssid (
-    echo.
-    echo  Сначала задай целевую SSID.
-    timeout /t 2 >nul
-    goto Main
-)
-
 :AutoLoop
 cls
-echo  =========================================
-echo              АВТО-РЕЖИМ SSID
-echo  =========================================
-echo.
-echo  Целевая SSID : !target_ssid!
-echo  Для выхода нажми Q.
-echo.
+echo Нажмите Q для выхода. Ожидание сети: !target_ssid!
+call :GetFullContext
 call :CheckApply
-choice /c QS /n /m "Q = стоп, S = следующая проверка" /t 5 /d S
+choice /c QS /n /t 5 /d S
 if errorlevel 2 goto AutoLoop
 goto Main
 
-
-:ApplyDnsForInterface
-if "%~1"=="" exit /b 1
-powershell -NoProfile -Command "$ErrorActionPreference='SilentlyContinue'; Add-DnsClientDohServerAddress -ServerAddress '%DNS1%' -DohTemplate '%DOH%' -AllowFallbackToUdp $false -AutoUpgrade $true; Add-DnsClientDohServerAddress -ServerAddress '%DNS2%' -DohTemplate '%DOH%' -AllowFallbackToUdp $false -AutoUpgrade $true; Set-DnsClientServerAddress -InterfaceAlias '%~1' -ServerAddresses @('%DNS1%','%DNS2%'); Clear-DnsClientCache"
-exit /b %errorlevel%
-
-
-:ResetDnsForInterface
-if "%~1"=="" exit /b 1
-powershell -NoProfile -Command "$ErrorActionPreference='SilentlyContinue'; Set-DnsClientServerAddress -InterfaceAlias '%~1' -ResetServerAddresses; Get-DnsClientDohServerAddress -ServerAddress @('%DNS1%','%DNS2%') | Remove-DnsClientDohServerAddress -Confirm:$false -ErrorAction SilentlyContinue; Get-DnsClientNrptRule | Where-Object { $_.DisplayName -eq '%RULE_NAME%' } | Remove-DnsClientNrptRule -Force -ErrorAction SilentlyContinue; Clear-DnsClientCache"
-exit /b %errorlevel%
-
-
-:FullReset
-echo.
-echo  Выполняется полный сброс...
-
-if defined wifi_alias (
-    if /i not "!wifi_alias!"=="—" call :ResetDnsForInterface "!wifi_alias!"
-)
-
-if defined adapter (
-    if /i not "!adapter!"=="!wifi_alias!" call :ResetDnsForInterface "!adapter!"
-)
-
-set "target_ssid="
-
-echo.
-echo  [OK] Сброс завершён.
-timeout /t 2 >nul
-goto Main
-
-
 :Info
 cls
-echo  =========================================
-echo               ИНФОРМАЦИЯ
-echo  =========================================
-echo.
-echo  DNS:
-echo   %DNS1%
-echo   %DNS2%
-echo.
-echo  DoH:
-echo   %DOH%
-echo.
-echo  Что делает программа:
-echo  - запоминает выбранный адаптер;
-echo  - показывает текущую Wi-Fi сеть (SSID);
-echo  - показывает тип, профиль, категорию и IPv4;
-echo  - показывает текущие подключения и доступные Wi-Fi сети;
-echo  - включает DNS только когда текущая SSID совпадает с выбранной;
-echo  - на остальных сетях возвращает автоматический DNS.
-echo.
+echo DNS: %DNS1%, %DNS2%
+echo DoH: %DOH%
 pause
 goto Main
